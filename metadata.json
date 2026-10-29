@@ -1,0 +1,6 @@
+{
+  "name": "Calmly — Nutritionist Appointment Platform",
+  "description": "A two-sided appointment product for a private nutritionist and her clients with no-show mitigation, live availability, and AI booking assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
