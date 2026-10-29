@@ -17,6 +17,8 @@ import {
 } from '../normalize.ts';
 import { LocalStorageRepo } from '../repository/localStorageRepo.ts';
 import { getNormalizedSeedData, seedInitialData } from '../seed.ts';
+import { Appointment } from '../../types.ts';
+import { mergeAppointments, sortAppointmentsAsc, findNextUpcomingAppointment } from '../clientStore.ts';
 
 export interface TestResult {
   id: string;
@@ -392,6 +394,172 @@ export async function runAllPureTests(): Promise<TestResult[]> {
     if (!meera || meera.status !== 'Done') throw new Error('Meera lost Done status after reset');
     if (!kabir || kabir.status !== 'No-show') throw new Error('Kabir lost No-show status after reset');
     if (meera.date !== '2026-10-23') throw new Error('Meera date was not restored to 2026-10-23');
+  });
+
+  // 18. applying an older-updated_at row does not overwrite a newer one
+  await test('stale-update-protection', 'Applying an older-updated_at row does not overwrite a newer one', 'Client Store & Reschedule', () => {
+    const newerAppt: Appointment = {
+      id: 'appt-123',
+      client_name: 'Test Client',
+      phone: '9820011111',
+      date: '2026-11-10',
+      time: '14:00',
+      status: 'Booked',
+      source: 'client',
+      notes: null,
+      reason: 'Checkup',
+      visit_type: 'In clinic',
+      confirmed_at: null,
+      seed_key: null,
+      created_at: '2026-10-29T10:00:00.000Z',
+      updated_at: '2026-10-29T10:30:00.000Z',
+    };
+
+    const staleIncoming: Appointment = {
+      ...newerAppt,
+      date: '2026-11-05',
+      time: '10:00',
+      updated_at: '2026-10-29T10:15:00.000Z', // older updated_at
+    };
+
+    const merged = mergeAppointments([newerAppt], [staleIncoming]);
+    if (merged.length !== 1) {
+      throw new Error(`Expected exactly 1 appointment, got ${merged.length}`);
+    }
+    if (merged[0].date !== '2026-11-10' || merged[0].time !== '14:00') {
+      throw new Error(`Stale incoming row overwrote newer state: date=${merged[0].date}, time=${merged[0].time}`);
+    }
+  });
+
+  // 19. a reschedule result replaces the row by id with no duplicate
+  await test('reschedule-replaces-by-id', 'A reschedule result replaces the row by id with no duplicate', 'Client Store & Reschedule', () => {
+    const originalAppt: Appointment = {
+      id: 'appt-abc',
+      client_name: 'Riya Shah',
+      phone: '9820011111',
+      date: '2026-11-01',
+      time: '10:00',
+      status: 'Booked',
+      source: 'client',
+      notes: null,
+      reason: 'Nutrition',
+      visit_type: 'In clinic',
+      confirmed_at: null,
+      seed_key: null,
+      created_at: '2026-10-29T08:00:00.000Z',
+      updated_at: '2026-10-29T08:00:00.000Z',
+    };
+
+    const otherAppt: Appointment = {
+      ...originalAppt,
+      id: 'appt-xyz',
+      client_name: 'Arjun Mehta',
+      phone: '9820022222',
+      date: '2026-11-03',
+      time: '11:00',
+    };
+
+    const currentStore = [originalAppt, otherAppt];
+
+    const rescheduledResult: Appointment = {
+      ...originalAppt,
+      date: '2026-11-15',
+      time: '16:00',
+      updated_at: '2026-10-29T09:00:00.000Z',
+    };
+
+    const merged = mergeAppointments(currentStore, [rescheduledResult]);
+    if (merged.length !== 2) {
+      throw new Error(`Expected 2 appointments with no duplicates, got ${merged.length}`);
+    }
+
+    const found = merged.find((a) => a.id === 'appt-abc');
+    if (!found) {
+      throw new Error('Rescheduled appointment appt-abc not found in store');
+    }
+    if (found.date !== '2026-11-15' || found.time !== '16:00') {
+      throw new Error(`Rescheduled date/time mismatch: got ${found.date} ${found.time}`);
+    }
+    // Verify old date/time does not exist anywhere in store
+    const oldInstances = merged.filter((a) => a.date === '2026-11-01' && a.time === '10:00');
+    if (oldInstances.length > 0) {
+      throw new Error('Old appointment date/time is still present in store');
+    }
+  });
+
+  // 20. the list is sorted by date and time
+  await test('appointments-sorted-chronologically', 'The list is sorted by date and time', 'Client Store & Reschedule', () => {
+    const base: Omit<Appointment, 'id' | 'date' | 'time'> = {
+      client_name: 'Client',
+      phone: '9820011111',
+      status: 'Booked',
+      source: 'client',
+      notes: null,
+      reason: null,
+      visit_type: 'In clinic',
+      confirmed_at: null,
+      seed_key: null,
+      created_at: '2026-10-29T00:00:00.000Z',
+      updated_at: '2026-10-29T00:00:00.000Z',
+    };
+
+    const unsorted: Appointment[] = [
+      { ...base, id: '1', date: '2026-11-15', time: '11:00' },
+      { ...base, id: '2', date: '2026-11-02', time: '16:30' },
+      { ...base, id: '3', date: '2026-11-02', time: '09:30' },
+      { ...base, id: '4', date: '2026-11-10', time: '14:00' },
+    ];
+
+    const sorted = mergeAppointments([], unsorted);
+    const order = sorted.map((a) => `${a.date} ${a.time}`);
+    const expected = [
+      '2026-11-02 09:30',
+      '2026-11-02 16:30',
+      '2026-11-10 14:00',
+      '2026-11-15 11:00',
+    ];
+
+    if (JSON.stringify(order) !== JSON.stringify(expected)) {
+      throw new Error(`Expected chronological order ${expected.join(', ')}, got ${order.join(', ')}`);
+    }
+  });
+
+  // 21. the next-appointment is the earliest upcoming Booked row
+  await test('next-appointment-earliest-upcoming', 'The next-appointment is the earliest upcoming Booked row', 'Client Store & Reschedule', () => {
+    const now = getNowInIST();
+    const [y, m, d] = now.date.split('-').map(Number);
+    const makeDate = (plusDays: number) => {
+      const dt = new Date(Date.UTC(y, m - 1, d + plusDays));
+      return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+    };
+
+    const base: Omit<Appointment, 'id' | 'date' | 'time' | 'status'> = {
+      client_name: 'Client',
+      phone: '9820011111',
+      source: 'client',
+      notes: null,
+      reason: null,
+      visit_type: 'In clinic',
+      confirmed_at: null,
+      seed_key: null,
+      created_at: '2026-10-29T00:00:00.000Z',
+      updated_at: '2026-10-29T00:00:00.000Z',
+    };
+
+    const list: Appointment[] = [
+      { ...base, id: 'done', date: makeDate(1), time: '09:00', status: 'Done' },
+      { ...base, id: 'cancelled', date: makeDate(1), time: '10:00', status: 'Cancelled' },
+      { ...base, id: 'later-booked', date: makeDate(5), time: '10:00', status: 'Booked' },
+      { ...base, id: 'earliest-booked', date: makeDate(2), time: '14:30', status: 'Booked' },
+    ];
+
+    const next = findNextUpcomingAppointment(list, '9820011111');
+    if (!next) {
+      throw new Error('Failed to find upcoming booked appointment');
+    }
+    if (next.id !== 'earliest-booked') {
+      throw new Error(`Expected earliest-booked appointment, got ${next.id} (${next.date} ${next.time})`);
+    }
   });
 
   return results;

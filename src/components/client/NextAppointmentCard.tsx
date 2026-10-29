@@ -27,6 +27,7 @@ import {
 } from '../../lib/ist.ts';
 import { getRepository } from '../../lib/repository/index.ts';
 import { useToast } from '../common/Toast.tsx';
+import { useClientAppointments, findNextUpcomingAppointment } from '../../lib/clientStore.ts';
 
 interface NextAppointmentCardProps {
   onRefresh?: () => void;
@@ -39,59 +40,14 @@ export const NextAppointmentCard: React.FC<NextAppointmentCardProps> = ({
 }) => {
   const { showToast } = useToast();
   const repo = getRepository();
+  const { appointments, loading, applyUpdatedAppointment } = useClientAppointments();
 
-  const [appointment, setAppointment] = useState<Appointment | null>(null);
-  const [loading, setLoading] = useState(true);
   const [isConfirming, setIsConfirming] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
 
-  const fetchNextAppointment = async () => {
-    try {
-      setLoading(true);
-      const all = await repo.getAppointments();
-      const now = getNowInIST();
-
-      // If URL has ?confirm=<id>, prioritize finding that appointment
-      if (confirmIdFromUrl) {
-        const found = all.find((a) => a.id === confirmIdFromUrl);
-        if (found && found.status === 'Booked') {
-          setAppointment(found);
-          setLoading(false);
-          return;
-        }
-      }
-
-      const clientPhone = localStorage.getItem('calmly_client_phone');
-
-      // Filter upcoming Booked appointments
-      const upcoming = all.filter((a) => {
-        if (a.status !== 'Booked') return false;
-        const isUpcoming = a.date > now.date || (a.date === now.date && a.time > now.time);
-        if (!isUpcoming) return false;
-        if (clientPhone) {
-          return a.phone === clientPhone;
-        }
-        return true; // if no phone set on device, show the closest upcoming for demonstration
-      });
-
-      // Sort by date then time ascending
-      upcoming.sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return a.time.localeCompare(b.time);
-      });
-
-      setAppointment(upcoming[0] || null);
-    } catch (err) {
-      console.error('Failed to load next appointment:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchNextAppointment();
-  }, [confirmIdFromUrl]);
+  const clientPhone = typeof localStorage !== 'undefined' ? localStorage.getItem('calmly_client_phone') : null;
+  const appointment = findNextUpcomingAppointment(appointments, clientPhone, confirmIdFromUrl);
 
   const handleConfirmAttendance = async () => {
     if (!appointment) return;
@@ -102,7 +58,7 @@ export const NextAppointmentCard: React.FC<NextAppointmentCardProps> = ({
         confirmed_at: nowIso,
         expected_updated_at: appointment.updated_at,
       });
-      setAppointment(updated);
+      applyUpdatedAppointment(updated);
       showToast({
         type: 'success',
         message: "Thank you! Your attendance is confirmed. We look forward to seeing you.",
@@ -131,16 +87,16 @@ export const NextAppointmentCard: React.FC<NextAppointmentCardProps> = ({
 
     setIsCancelling(true);
     try {
-      await repo.updateAppointment(appointment.id, {
+      const updated = await repo.updateAppointment(appointment.id, {
         status: 'Cancelled',
         expected_updated_at: appointment.updated_at,
       });
+      applyUpdatedAppointment(updated);
       showToast({
         type: 'info',
         message: 'Your appointment has been cancelled.',
       });
       setShowCancelDialog(false);
-      fetchNextAppointment();
       onRefresh?.();
     } catch (err) {
       showToast({
@@ -166,7 +122,7 @@ export const NextAppointmentCard: React.FC<NextAppointmentCardProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  if (loading) {
+  if (loading && !appointment) {
     return (
       <div className="w-full bg-white rounded-2xl p-6 border border-stone-200/80 shadow-xs animate-pulse">
         <div className="h-4 bg-stone-200 rounded w-1/4 mb-4"></div>

@@ -20,25 +20,16 @@ import { AssistantChat } from '../components/client/AssistantChat.tsx';
 export const ClientHomePage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const confirmId = searchParams.get('confirm');
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  const handleRefresh = () => {
-    setRefreshKey((k) => k + 1);
-  };
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-stone-50 text-stone-800">
       <DemoBanner />
-      <Header onIdentityChange={handleRefresh} />
+      <Header />
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 space-y-4 pb-24 md:pb-16">
         {/* Next appointment card pinned at top of content */}
         <div className="pt-6">
-          <NextAppointmentCard
-            key={refreshKey}
-            confirmIdFromUrl={confirmId}
-            onRefresh={handleRefresh}
-          />
+          <NextAppointmentCard confirmIdFromUrl={confirmId} />
         </div>
 
         <Hero />

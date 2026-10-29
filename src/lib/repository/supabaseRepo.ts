@@ -15,6 +15,7 @@ import {
 import { getValidatedConfig } from '../config.ts';
 import { getNowInIST } from '../ist.ts';
 import { mapDbErrorToUserMessage } from '../supabase.ts';
+import { LocalStorageRepo } from './localStorageRepo.ts';
 
 export class SupabaseRepo implements Repository {
   name: 'supabase' = 'supabase';
@@ -26,115 +27,160 @@ export class SupabaseRepo implements Repository {
   }
 
   async getAppointments(): Promise<Appointment[]> {
-    const { data, error } = await this.client
-      .from('appointments')
-      .select('*')
-      .order('date', { ascending: true })
-      .order('time', { ascending: true });
+    try {
+      const { data, error } = await this.client
+        .from('appointments')
+        .select('*')
+        .order('date', { ascending: true })
+        .order('time', { ascending: true });
 
-    if (error) {
-      console.error('Failed to fetch appointments from Supabase:', error);
-      throw new Error(mapDbErrorToUserMessage(error));
+      if (error) {
+        console.warn('Supabase query failed, falling back to local storage:', error);
+        const local = new LocalStorageRepo();
+        return local.getAppointments();
+      }
+      return (data || []) as Appointment[];
+    } catch (err: unknown) {
+      console.warn('[SupabaseRepo] Network failure accessing Supabase. Falling back to local storage:', err);
+      const local = new LocalStorageRepo();
+      return local.getAppointments();
     }
-    return (data || []) as Appointment[];
   }
 
   async getAppointmentById(id: string): Promise<Appointment | null> {
-    const { data, error } = await this.client
-      .from('appointments')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
+    try {
+      const { data, error } = await this.client
+        .from('appointments')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
 
-    if (error) {
-      console.error(`Failed to fetch appointment ${id}:`, error);
-      throw new Error(mapDbErrorToUserMessage(error));
+      if (error) {
+        console.warn(`Failed to fetch appointment ${id} from Supabase, falling back to local:`, error);
+        const local = new LocalStorageRepo();
+        return local.getAppointmentById(id);
+      }
+      return (data as Appointment) || null;
+    } catch (err) {
+      console.warn(`[SupabaseRepo] Network failure fetching appointment ${id}. Falling back to local:`, err);
+      const local = new LocalStorageRepo();
+      return local.getAppointmentById(id);
     }
-    return (data as Appointment) || null;
   }
 
   async createAppointment(payload: NewAppointmentPayload): Promise<Appointment> {
-    const record: Record<string, any> = {
-      client_name: payload.client_name.trim(),
-      phone: payload.phone || null,
-      date: payload.date,
-      time: payload.time,
-      status: payload.status || 'Booked',
-      source: payload.source,
-      notes: payload.notes || null,
-      reason: payload.reason || null,
-      visit_type: payload.visit_type || 'In clinic',
-      seed_key: payload.seed_key || null,
-    };
+    try {
+      const record: Record<string, any> = {
+        client_name: payload.client_name.trim(),
+        phone: payload.phone || null,
+        date: payload.date,
+        time: payload.time,
+        status: payload.status || 'Booked',
+        source: payload.source,
+        notes: payload.notes || null,
+        reason: payload.reason || null,
+        visit_type: payload.visit_type || 'In clinic',
+        seed_key: payload.seed_key || null,
+      };
 
-    let { data, error } = await this.client
-      .from('appointments')
-      .insert(record)
-      .select()
-      .single();
+      let { data, error } = await this.client
+        .from('appointments')
+        .insert(record)
+        .select()
+        .single();
 
-    // Graceful fallback if Step 0 SQL migration hasn't been run yet in Supabase
-    if (error && (error.code === '42703' || error.message?.includes('does not exist'))) {
-      delete record.seed_key;
-      delete record.reason;
-      delete record.visit_type;
-      const retry = await this.client.from('appointments').insert(record).select().single();
-      data = retry.data;
-      error = retry.error;
+      // Graceful fallback if Step 0 SQL migration hasn't been run yet in Supabase
+      if (error && (error.code === '42703' || error.message?.includes('does not exist'))) {
+        delete record.seed_key;
+        delete record.reason;
+        delete record.visit_type;
+        const retry = await this.client.from('appointments').insert(record).select().single();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error) {
+        throw new Error(mapDbErrorToUserMessage(error));
+      }
+      return data as Appointment;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('Unable to reach the server') ||
+        msg.includes('TypeError')
+      ) {
+        console.warn('[SupabaseRepo] Network failure on createAppointment. Falling back to local storage.');
+        const local = new LocalStorageRepo();
+        return local.createAppointment(payload);
+      }
+      throw err;
     }
-
-    if (error) {
-      throw new Error(mapDbErrorToUserMessage(error));
-    }
-    return data as Appointment;
   }
 
   async updateAppointment(id: string, payload: UpdateAppointmentPayload): Promise<Appointment> {
-    const updateData: Record<string, unknown> = {};
-    if (payload.client_name !== undefined) updateData.client_name = payload.client_name.trim();
-    if (payload.phone !== undefined) updateData.phone = payload.phone;
-    if (payload.date !== undefined) updateData.date = payload.date;
-    if (payload.time !== undefined) updateData.time = payload.time;
-    if (payload.status !== undefined) updateData.status = payload.status;
-    if (payload.notes !== undefined) updateData.notes = payload.notes;
-    if (payload.reason !== undefined) updateData.reason = payload.reason;
-    if (payload.visit_type !== undefined) updateData.visit_type = payload.visit_type;
-    if (payload.confirmed_at !== undefined) updateData.confirmed_at = payload.confirmed_at;
+    try {
+      const updateData: Record<string, unknown> = {};
+      if (payload.client_name !== undefined) updateData.client_name = payload.client_name.trim();
+      if (payload.phone !== undefined) updateData.phone = payload.phone;
+      if (payload.date !== undefined) updateData.date = payload.date;
+      if (payload.time !== undefined) updateData.time = payload.time;
+      if (payload.status !== undefined) updateData.status = payload.status;
+      if (payload.notes !== undefined) updateData.notes = payload.notes;
+      if (payload.reason !== undefined) updateData.reason = payload.reason;
+      if (payload.visit_type !== undefined) updateData.visit_type = payload.visit_type;
+      if (payload.confirmed_at !== undefined) updateData.confirmed_at = payload.confirmed_at;
+      updateData.updated_at = new Date().toISOString();
 
-    let query = this.client.from('appointments').update(updateData).eq('id', id);
+      let query = this.client.from('appointments').update(updateData).eq('id', id);
 
-    // Optimistic concurrency check
-    if (payload.expected_updated_at) {
-      query = query.eq('updated_at', payload.expected_updated_at);
-    }
-
-    let { data, error } = await query.select();
-
-    // Graceful fallback if optional columns do not exist yet
-    if (error && (error.code === '42703' || error.message?.includes('does not exist'))) {
-      delete updateData.reason;
-      delete updateData.visit_type;
-      let retryQuery = this.client.from('appointments').update(updateData).eq('id', id);
+      // Optimistic concurrency check
       if (payload.expected_updated_at) {
-        retryQuery = retryQuery.eq('updated_at', payload.expected_updated_at);
+        query = query.eq('updated_at', payload.expected_updated_at);
       }
-      const retry = await retryQuery.select();
-      data = retry.data;
-      error = retry.error;
-    }
 
-    if (error) {
-      throw new Error(mapDbErrorToUserMessage(error));
-    }
+      let { data, error } = await query.select();
 
-    if (!data || data.length === 0) {
-      if (payload.expected_updated_at) {
-        throw new Error('This appointment was changed elsewhere, reloaded');
+      // Graceful fallback if optional columns do not exist yet
+      if (error && (error.code === '42703' || error.message?.includes('does not exist'))) {
+        delete updateData.reason;
+        delete updateData.visit_type;
+        let retryQuery = this.client.from('appointments').update(updateData).eq('id', id);
+        if (payload.expected_updated_at) {
+          retryQuery = retryQuery.eq('updated_at', payload.expected_updated_at);
+        }
+        const retry = await retryQuery.select();
+        data = retry.data;
+        error = retry.error;
       }
-      throw new Error('Appointment not found or not modified');
-    }
 
-    return data[0] as Appointment;
+      if (error) {
+        throw new Error(mapDbErrorToUserMessage(error));
+      }
+
+      if (!data || data.length === 0) {
+        if (payload.expected_updated_at) {
+          throw new Error('This appointment was changed elsewhere, reloaded');
+        }
+        throw new Error('Appointment not found or not modified');
+      }
+
+      return data[0] as Appointment;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('Unable to reach the server') ||
+        msg.includes('TypeError')
+      ) {
+        console.warn('[SupabaseRepo] Network failure on updateAppointment. Falling back to local storage.');
+        const local = new LocalStorageRepo();
+        return local.updateAppointment(id, payload);
+      }
+      throw err;
+    }
   }
 
   async getWaitlist(): Promise<WaitlistEntry[]> {
@@ -205,25 +251,44 @@ export class SupabaseRepo implements Repository {
   }
 
   subscribeToChanges(onChange: () => void): () => void {
-    // 1. Supabase Realtime Channel
-    const channel = this.client
-      .channel('calmly_appointments_realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'appointments' },
-        () => {
-          onChange();
-        }
-      )
-      .subscribe((status) => {
-        this.isLive = status === 'SUBSCRIBED';
-      });
+    let channel: any = null;
+    try {
+      channel = this.client
+        .channel('calmly_appointments_realtime')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'appointments' },
+          () => {
+            onChange();
+          }
+        )
+        .subscribe((status) => {
+          this.isLive = status === 'SUBSCRIBED';
+        });
+    } catch (err) {
+      this.isLive = false;
+      console.warn('Supabase realtime channel subscription error:', err);
+    }
 
-    // 2. 5-second polling fallback
-    const interval = setInterval(onChange, 5000);
+    // 2. Fallback polling: runs every 10 seconds ONLY when realtime is not connected, paused when tab is hidden
+    const interval = setInterval(() => {
+      if (this.isLive) {
+        return;
+      }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      onChange();
+    }, 10000);
 
     return () => {
-      this.client.removeChannel(channel);
+      if (channel) {
+        try {
+          this.client.removeChannel(channel);
+        } catch {
+          // ignore cleanup error
+        }
+      }
       clearInterval(interval);
     };
   }

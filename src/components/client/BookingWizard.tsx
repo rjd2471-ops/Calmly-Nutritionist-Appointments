@@ -32,6 +32,7 @@ import {
 import { normalizePhone } from '../../lib/normalize.ts';
 import { getRepository } from '../../lib/repository/index.ts';
 import { useToast } from '../common/Toast.tsx';
+import { applyUpdatedAppointment } from '../../lib/clientStore.ts';
 
 const GOAL_OPTIONS = [
   'Weight management',
@@ -222,6 +223,10 @@ export const BookingWizard: React.FC = () => {
         if (normPhone) {
           localStorage.setItem('calmly_client_phone', normPhone);
         }
+
+        // Apply immediately to the shared client store and update local appointments
+        applyUpdatedAppointment(updated);
+        setAppointments((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
 
         setCreatedAppointment(updated);
         setStep(4);

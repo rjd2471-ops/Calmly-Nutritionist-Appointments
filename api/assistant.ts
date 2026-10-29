@@ -107,7 +107,15 @@ export async function handleAssistantRequest(req: Request, res: Response) {
   const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
   let supabase: ReturnType<typeof createClient> | null = null;
-  if (supabaseUrl && supabaseKey && !supabaseKey.startsWith('sb_secret') && !supabaseKey.includes('service_role')) {
+  if (
+    supabaseUrl &&
+    supabaseKey &&
+    !supabaseUrl.includes('your-project-id') &&
+    !supabaseUrl.includes('placeholder') &&
+    !supabaseKey.includes('your-anon') &&
+    !supabaseKey.startsWith('sb_secret') &&
+    !supabaseKey.includes('service_role')
+  ) {
     try {
       supabase = createClient(supabaseUrl, supabaseKey);
     } catch {

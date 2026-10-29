@@ -60,6 +60,17 @@ export function sanitizeSupabaseUrl(urlRaw: unknown): { url: string; error?: str
     return { url, error: 'VITE_SUPABASE_URL must end with .supabase.co' };
   }
 
+  // Detect placeholder values
+  if (
+    url.includes('your-project-id') ||
+    url.includes('your-project') ||
+    url.includes('example.supabase.co') ||
+    url.includes('placeholder') ||
+    url.includes('<')
+  ) {
+    return { url: '', error: 'VITE_SUPABASE_URL contains placeholder value' };
+  }
+
   return { url };
 }
 
@@ -74,6 +85,17 @@ export function sanitizeSupabaseAnonKey(keyRaw: unknown): { key: string; error?:
     return { key: '', error: 'Secret key detected, use the publishable key (VITE_SUPABASE_ANON_KEY)' };
   }
 
+  // Detect placeholder keys
+  if (
+    key.includes('your-anon-publishable-key') ||
+    key.includes('your-anon-key') ||
+    key.includes('your-anon') ||
+    key.includes('placeholder') ||
+    key.includes('<')
+  ) {
+    return { key: '', error: 'VITE_SUPABASE_ANON_KEY contains placeholder value' };
+  }
+
   return { key };
 }
 
@@ -84,8 +106,9 @@ export function maskKey(key: string): string {
 }
 
 export function getValidatedConfig(): EnvValidationResult {
-  const rawUrl = import.meta.env.VITE_SUPABASE_URL;
-  const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const envObj = typeof import.meta !== 'undefined' && (import.meta as any).env ? (import.meta as any).env : (typeof process !== 'undefined' ? process.env : {});
+  const rawUrl = envObj?.VITE_SUPABASE_URL;
+  const rawKey = envObj?.VITE_SUPABASE_ANON_KEY;
 
   // Check if unconfigured
   if (!rawUrl && !rawKey) {
@@ -103,29 +126,31 @@ export function getValidatedConfig(): EnvValidationResult {
 
   const urlResult = sanitizeSupabaseUrl(rawUrl);
   if (urlResult.error) {
+    const isPlaceholder = urlResult.error.includes('placeholder') || urlResult.error.includes('missing');
     return {
       isValid: false,
       isDemoMode: true,
-      supabaseUrl: urlResult.url,
+      supabaseUrl: isPlaceholder ? '' : urlResult.url,
       supabaseAnonKey: '',
       maskedKey: maskKey(sanitizeEnvValue(rawKey)),
-      host: 'invalid-url',
-      error: urlResult.error,
-      badVariable: 'VITE_SUPABASE_URL',
+      host: isPlaceholder ? 'local-demo' : 'invalid-url',
+      error: isPlaceholder ? undefined : urlResult.error,
+      badVariable: isPlaceholder ? undefined : 'VITE_SUPABASE_URL',
     };
   }
 
   const keyResult = sanitizeSupabaseAnonKey(rawKey);
   if (keyResult.error) {
+    const isPlaceholder = keyResult.error.includes('placeholder') || keyResult.error.includes('missing');
     return {
       isValid: false,
       isDemoMode: true,
-      supabaseUrl: urlResult.url,
+      supabaseUrl: isPlaceholder ? '' : urlResult.url,
       supabaseAnonKey: '',
       maskedKey: maskKey(sanitizeEnvValue(rawKey)),
-      host: urlResult.url.replace('https://', ''),
-      error: keyResult.error,
-      badVariable: 'VITE_SUPABASE_ANON_KEY',
+      host: isPlaceholder ? 'local-demo' : urlResult.url.replace('https://', ''),
+      error: isPlaceholder ? undefined : keyResult.error,
+      badVariable: isPlaceholder ? undefined : 'VITE_SUPABASE_ANON_KEY',
     };
   }
 

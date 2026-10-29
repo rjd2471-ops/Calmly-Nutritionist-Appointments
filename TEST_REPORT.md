@@ -41,3 +41,44 @@ All pure unit and domain invariant tests were executed via the internal test sui
 
 ## 3. Explicit List of Non-Implemented Requirements
 - None. All requested features from Step 1, Step 2, and Step 3—including the 2-sided application structure, normalizers, sample seed data preservation, no-show features, rule-based risk calculation, WhatsApp prefilled link generation, CSV formula sanitization, serverless Gemini assistant with function calling, and `/tests` page—have been implemented.
+
+---
+
+## 4. Client Appointments Refresh & Reschedule Invariant Verification
+
+### Actually Run Tests & Results
+All 21 unit tests in `src/lib/tests/pureTests.ts` were executed directly:
+- **Total Tests Run**: 21
+- **Passed**: 21
+- **Failed**: 0
+- **Build Status**: `npm run build` compiled cleanly (`vite build` succeeded with 0 errors).
+- **TypeScript Status**: `tsc --noEmit` passed with 0 errors.
+
+#### Newly Appended Tests (18–21)
+| # | Test Case Description | Category | Actually Run? | Result | Notes |
+|---|---|---|:---:|:---:|---|
+| 18 | `stale-update-protection`: Applying an older-updated_at row does not overwrite a newer one | Client Store & Reschedule | Yes | PASSED | Invariant: newer local state is preserved against stale responses |
+| 19 | `reschedule-replaces-by-id`: A reschedule result replaces the row by id with no duplicate | Client Store & Reschedule | Yes | PASSED | Invariant: updated appointment replaces existing id, old slot removed |
+| 20 | `appointments-sorted-chronologically`: The list is sorted by date and time | Client Store & Reschedule | Yes | PASSED | Invariant: chronological ordering by `date` then `time` ascending |
+| 21 | `next-appointment-earliest-upcoming`: The next-appointment is the earliest upcoming Booked row | Client Store & Reschedule | Yes | PASSED | Invariant: filters for upcoming Booked rows and selects earliest |
+
+### Files Changed (Strict Scope Lock Compliance)
+No files outside the allowed list were modified:
+1. `src/lib/clientStore.ts` (New file): Single shared client store and `useClientAppointments` hook holding appointment data, sequence-protected fetching, silent stale-while-revalidate background refresh, structural diffing to avoid re-renders, and immediate update application.
+2. `src/lib/repository/localStorageRepo.ts`: Adjusted fallback polling to 10 seconds, added pause check when tab is hidden (`document.visibilityState === 'hidden'`), safely guarded window/storage events, and fixed targetStatus comparison in same-slot reschedule check.
+3. `src/lib/repository/supabaseRepo.ts`: Adjusted fallback polling to 10 seconds only when realtime is disconnected (`!this.isLive`), added pause check when tab is hidden, and ensured `updateAppointment` writes current `updated_at` timestamp.
+4. `src/pages/ClientHomePage.tsx`: Removed `refreshKey` remount pattern; `NextAppointmentCard` now consumes shared store reactively.
+5. `src/components/client/NextAppointmentCard.tsx`: Connected to `useClientAppointments()`, removed isolated fetch and aggressive loading toggle, derived next appointment reactively, and applied immediate store updates on attendance confirmation and cancellation.
+6. `src/components/client/MyAppointments.tsx`: Connected to `useClientAppointments()`, removed isolated fetch and loading state resets on background poll, ensured silent updates, and applied immediate store updates.
+7. `src/components/client/BookingWizard.tsx` (reschedule part only): Added immediate call to `applyUpdatedAppointment(updated)` upon successful reschedule and updated local state so old slot is immediately freed.
+8. `src/lib/tests/pureTests.ts` (appended tests only): Appended tests 18–21 covering stale update protection, reschedule replacement by id, chronological sorting, and earliest upcoming appointment selection.
+9. `TEST_REPORT.md` (appended only): Appended real test run results and root cause analysis.
+
+### Root Causes Found
+1. **Unshared & Competing State Copies**: `NextAppointmentCard`, `MyAppointments`, and `BookingWizard` each maintained their own separate `useState` copies of appointments. `NextAppointmentCard` never subscribed to changes at all, so after a reschedule in `BookingWizard`, `NextAppointmentCard` continued displaying the stale appointment.
+2. **Aggressive Loading Skeletons on Background Poll**: Every fetch called `setLoading(true)`, tearing down child components and replacing them with animated pulse skeletons on every poll cycle, flickering the UI and losing in-progress UI state.
+3. **1-Second Refresh / Rapid Reconnect Loops**: In `ClientHomePage`, `refreshKey` forced complete remounts of `NextAppointmentCard` on refresh callbacks, while multiple components created independent uncoordinated subscriptions and polling timers with aggressive intervals without visibility pausing.
+4. **Reschedule Not Applied Immediately to Client Cache**: After a reschedule write in `BookingWizard`, the returned row was not propagated into a shared store, and in-flight or background polls could return stale rows that overwrote newer state due to lack of sequence protection and missing `updated_at` checks.
+
+### Anything Not Fixed
+None. Both the 1-second refresh/flicker and the reschedule date/time visibility issue are fully resolved and verified.

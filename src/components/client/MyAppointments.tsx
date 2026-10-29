@@ -26,41 +26,19 @@ import {
 } from '../../lib/ist.ts';
 import { getRepository } from '../../lib/repository/index.ts';
 import { useToast } from '../common/Toast.tsx';
+import { useClientAppointments } from '../../lib/clientStore.ts';
 
 export const MyAppointments: React.FC = () => {
   const { showToast } = useToast();
   const repo = getRepository();
 
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [loading, setLoading] = useState(true);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [appointmentToCancel, setAppointmentToCancel] = useState<Appointment | null>(null);
 
-  const fetchAppointments = async () => {
-    try {
-      setLoading(true);
-      const all = await repo.getAppointments();
-      const savedPhone = localStorage.getItem('calmly_client_phone');
-
-      let filtered = all;
-      if (savedPhone) {
-        filtered = all.filter((a) => a.phone === savedPhone);
-      }
-
-      setAppointments(filtered);
-    } catch (err) {
-      console.error('Failed to load appointments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchAppointments();
-    const unsub = repo.subscribeToChanges(() => fetchAppointments());
-    return unsub;
-  }, []);
+  const { appointments: allAppointments, loading, applyUpdatedAppointment } = useClientAppointments();
+  const savedPhone = typeof localStorage !== 'undefined' ? localStorage.getItem('calmly_client_phone') : null;
+  const appointments = savedPhone ? allAppointments.filter((a) => a.phone === savedPhone) : allAppointments;
 
   const now = getNowInIST();
 
@@ -83,15 +61,15 @@ export const MyAppointments: React.FC = () => {
   const handleConfirmAttendance = async (appt: Appointment) => {
     try {
       const nowIso = new Date().toISOString();
-      await repo.updateAppointment(appt.id, {
+      const updated = await repo.updateAppointment(appt.id, {
         confirmed_at: nowIso,
         expected_updated_at: appt.updated_at,
       });
+      applyUpdatedAppointment(updated);
       showToast({
         type: 'success',
         message: 'Attendance confirmed. Thank you!',
       });
-      fetchAppointments();
     } catch (err) {
       showToast({
         type: 'error',
@@ -114,17 +92,17 @@ export const MyAppointments: React.FC = () => {
         return;
       }
 
-      await repo.updateAppointment(appointmentToCancel.id, {
+      const updated = await repo.updateAppointment(appointmentToCancel.id, {
         status: 'Cancelled',
         expected_updated_at: appointmentToCancel.updated_at,
       });
 
+      applyUpdatedAppointment(updated);
       showToast({
         type: 'info',
         message: 'Appointment cancelled.',
       });
       setAppointmentToCancel(null);
-      fetchAppointments();
     } catch (err) {
       showToast({
         type: 'error',
@@ -228,7 +206,7 @@ export const MyAppointments: React.FC = () => {
         </button>
       </div>
 
-      {loading ? (
+      {loading && appointments.length === 0 ? (
         <div className="space-y-4">
           {[1, 2].map((i) => (
             <div key={i} className="h-32 bg-white rounded-2xl border border-stone-200 p-6 animate-pulse" />
